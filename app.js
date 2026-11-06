@@ -26,4 +26,17 @@ $('templatesBtn').onclick=()=>{let list=$('templateList');list.replaceChildren()
 /* Legacy export superseded by complete v0.2 export. */
 $('export').onclick=()=>{let blob=new Blob([JSON.stringify({app:'Mein Haushalt',version:1,exported:new Date().toISOString(),data:db},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`mein-haushalt-sicherung-${now()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),5000)};
 $('import').onchange=async e=>{let file=e.target.files[0];if(!file)return;try{let obj=JSON.parse(await file.text());if(obj.app!=='Mein Haushalt'||obj.version!==1||!obj.data||!Array.isArray(obj.data.rooms)||!Array.isArray(obj.data.categories)||!Array.isArray(obj.data.tasks)||obj.data.tasks.some(t=>typeof t.name!=='string'||typeof t.due!=='string'))throw Error('Ungültiges Sicherungsformat');if(confirm('Alle aktuellen Daten durch diese Sicherung ersetzen?')){db=obj.data;save();render();alert('Sicherung importiert.')}}catch(err){alert('Import nicht möglich: '+err.message)}e.target.value=''};
-if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});render();
+if('serviceWorker' in navigator){
+ navigator.serviceWorker.register('./sw.js', {updateViaCache:'none'}).then(reg=>{
+  // Check for a new app version when opening the app again.
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)reg.update().catch(()=>{});});
+  window.addEventListener('pageshow',()=>reg.update().catch(()=>{}));
+ }).catch(()=>{});
+ // Reload once when the new service worker takes control, preserving local data.
+ let firstController=navigator.serviceWorker.controller;
+ navigator.serviceWorker.addEventListener('controllerchange',()=>{
+  if(firstController && !sessionStorage.getItem('mh-sw-reload-027')){
+   sessionStorage.setItem('mh-sw-reload-027','1');location.reload();
+  }
+ });
+}render();

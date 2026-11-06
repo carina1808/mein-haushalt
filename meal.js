@@ -16,7 +16,7 @@ const M=(()=>{
  function tab(id){document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.page===id));render()}
  function render(){cleanup();renderRecipes();renderPlan();renderHome();el('backupAge').textContent=state.lastBackup?'Letzte Sicherung: '+fmt(state.lastBackup.slice(0,10)):'Noch keine Sicherung aus Version 0.2 erstellt';}
  function renderRecipes(){let q=el('recipeSearch').value.trim().toLocaleLowerCase('de'),rs=state.recipes.filter(r=>(!filterFav||r.favorite)&&(!q||[r.name,...(r.ingredients||[]).map(i=>i.name)].join(' ').toLocaleLowerCase('de').includes(q))).sort((a,b)=>a.name.localeCompare(b.name,'de'));el('recipeFav').classList.toggle('selected',filterFav);el('recipeList').replaceChildren();for(let r of rs){let row=document.createElement('button');row.className='recipe-row';row.innerHTML=`<span class="recipe-image">${r.cover?'<img alt="" />':'▧'}</span><span class="grow"><strong>${esc(r.name)}</strong><small>${r.favorite?'★ Favorit · ':''}${r.ingredients?.length||0} Zutaten</small></span><span>›</span>`;row.onclick=()=>editRecipe(r.id);el('recipeList').append(row);if(r.cover)thumb(r.cover,row.querySelector('img'))}if(!rs.length)el('recipeList').innerHTML='<p class="empty">Keine passenden Rezepte.</p>'}
- function editRecipe(id=null,prefill=''){editingRecipe=id;let r=byId(id)||{name:prefill,servings:4,ingredients:[],photos:[]};el('recipeTitle').textContent=id?'Rezept bearbeiten':'Neues Rezept';el('rName').value=r.name||'';el('rServings').value=r.servings||4;el('rUrl').value=r.url||'';el('rBook').value=r.book||'';el('rPage').value=r.page||'';el('rNotes').value=r.notes||'';el('rFav').checked=!!r.favorite;el('rIngredients').value=(r.ingredients||[]).map(i=>[i.amount,i.unit,i.name].filter(Boolean).join(' ')).join('\n');el('rDelete').hidden=!id;el('rPhotos').replaceChildren();drawPhotos(r.photos||[],r.cover);el('recipeDialog').showModal()}
+ function editRecipe(id=null,prefill=''){editingRecipe=id;let r=byId(id)||{name:prefill,servings:4,ingredients:[],photos:[]};el('recipeTitle').textContent=id?'Rezept bearbeiten':'Neues Rezept';el('rName').value=r.name||'';el('rServings').value=r.servings||4;el('rUrl').value=r.url||'';el('rBook').value=r.book||'';el('rPage').value=r.page||'';el('rNotes').value=r.notes||'';el('rFav').checked=!!r.favorite;el('rIngredients').value=(r.ingredients||[]).map(i=>[i.amount,i.unit,i.name].filter(Boolean).join(' ')).join('\n');el('rDelete').hidden=!id;el('rPdfStatus').textContent='';el('rPhotos').replaceChildren();drawPhotos(r.photos||[],r.cover);el('recipeDialog').showModal()}
  function drawPhotos(ids,cover){
   let box=el('rPhotos');box.replaceChildren();
   ids.forEach((id,i)=>{
@@ -125,6 +125,66 @@ const M=(()=>{
    }
   }finally{button.disabled=false;button.textContent='Zutaten aus Link übernehmen'}
  }
+ // PDF import uses the free PDF.js library; extraction stays on-device.
+ let pdfLibraryPromise;
+ function loadPdfLibrary(){
+  if(window.pdfjsLib)return Promise.resolve(window.pdfjsLib);
+  if(!pdfLibraryPromise){
+   pdfLibraryPromise=new Promise((resolve,reject)=>{
+    const script=document.createElement('script');
+    script.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    script.onload=()=>window.pdfjsLib?resolve(window.pdfjsLib):reject(Error('PDF-Bibliothek nicht geladen'));
+    script.onerror=()=>reject(Error('PDF-Bibliothek konnte nicht geladen werden. Bitte Internetverbindung prüfen.'));
+    document.head.append(script);
+   }).catch(e=>{pdfLibraryPromise=null;throw e});
+  }
+  return pdfLibraryPromise;
+ }
+ function pdfRows(items,width){
+  const lines=[];
+  for(const it of items){
+   const str=String(it.str||'').trim();if(!str)continue;
+   const x=it.transform?.[4]||0,y=it.transform?.[5]||0;
+   let line=lines.find(l=>Math.abs(l.y-y)<2.7&&Math.abs(l.x-x)<width*.42);
+   if(!line){line={x,y,parts:[]};lines.push(line)}
+   line.x=Math.min(line.x,x);line.parts.push({x,str});
+  }
+  return lines.map(l=>({...l,text:l.parts.sort((a,b)=>a.x-b.x).map(p=>p.str).join(' ').replace(/\s+/g,' ').trim()})).sort((a,b)=>b.y-a.y||a.x-b.x);
+ }
+ function parsePdfRecipe(pages){
+  const first=pages[0];if(!first)return null;
+  const all=first.rows;
+  const title=all.find(l=>l.y>first.height*.65&&l.text.length>7&&!/REWE|Gesamtzeit|Zubereitungszeit|Schwierigkeit|Nährwerte/i.test(l.text))?.text||'';
+  const heading=all.find(l=>/Zutaten\s+für\s+\d+\s+(Personen|Portionen)/i.test(l.text));
+  if(!heading)return null;
+  const servings=Number(heading.text.match(/\d+/)?.[0])||4;
+  // REWE print PDFs use two columns: instructions on the left, ingredient list on the right.
+  const right=all.filter(l=>l.x>first.width*.53&&l.y<heading.y-3);
+  const stop=right.find(l=>/^(Utensilien|Zubereitung|Nährwerte)/i.test(l.text));
+  const selected=right.filter(l=>!stop||l.y>stop.y);
+  const ingredients=selected.map(l=>l.text.replace(/^(?:[•*\-]\s*)/,'').replace(/^(\d+(?:[.,]\d+)?)(g|kg|ml|l|EL|TL|Bd\.)\b/i,'$1 $2').trim())
+   .filter(t=>t.length>2&&!/^(Utensilien|Zutaten|Küchenreibe|Auflaufform|Zubereitung)/i.test(t));
+  return ingredients.length>=3?{name:title,servings,ingredients}:null;
+ }
+ async function importPdf(file){
+  if(!file)return;
+  const status=el('rPdfStatus');status.textContent='PDF wird ausgelesen …';
+  try{
+   if(file.size>20*1024*1024)throw Error('PDF ist größer als 20 MB. Bitte eine kleinere Datei verwenden.');
+   const pdfjs=await loadPdfLibrary();
+   pdfjs.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+   const doc=await pdfjs.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
+   const pages=[];
+   for(let i=1;i<=Math.min(doc.numPages,3);i++){
+    const page=await doc.getPage(i),vp=page.getViewport({scale:1}),content=await page.getTextContent();
+    pages.push({rows:pdfRows(content.items,vp.width),width:vp.width,height:vp.height});
+   }
+   const result=parsePdfRecipe(pages);
+   if(!result)throw Error('Keine eindeutige Zutatenliste gefunden. Diese PDF ist möglicherweise ein Scan oder anders aufgebaut.');
+   applyImportedRecipe(result,'der PDF-Datei');
+   status.textContent=result.ingredients.length+' Zutaten für '+result.servings+' Portionen erkannt. Bitte prüfen und speichern.';
+  }catch(e){status.textContent='PDF-Import fehlgeschlagen: '+e.message;notify(status.textContent)}
+ }
  function importPastedText(){
   const raw=el('rImportText').value.trim();
   if(!raw)return notify('Bitte zuerst den kopierten Rezepttext einfügen.');
@@ -177,7 +237,7 @@ const M=(()=>{
  async function exportAll(){let photos={};for(let r of state.recipes)for(let id of r.photos||[]){let blob=await photo(id);if(blob)photos[id]=await blobToData(blob)}let tasks;try{tasks=JSON.parse(localStorage.getItem('mein-haushalt-v01'))}catch{}let backup={app:'Mein Haushalt',version:2,exported:new Date().toISOString(),data:tasks||{rooms:[],categories:[],tasks:[]},meal:{...state,lastBackup:new Date().toISOString()},photos};let a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(backup)],{type:'application/json'}));a.href=url;a.download=`mein-haushalt-sicherung-v02-${day()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);state.lastBackup=backup.exported;save();render()}
  async function importAll(file){let backup=JSON.parse(await file.text());if(backup.app!=='Mein Haushalt'||![1,2].includes(backup.version)||!backup.data||!Array.isArray(backup.data.tasks)||!Array.isArray(backup.data.rooms)||!Array.isArray(backup.data.categories))throw Error('Ungültige Sicherungsdatei');if(backup.version===2&&(!backup.meal||!Array.isArray(backup.meal.recipes)||!Array.isArray(backup.meal.plan)||typeof backup.photos!=='object'))throw Error('Ungültige Version-0.2-Sicherung');if(!confirm('ACHTUNG: Alle aktuellen Aufgaben, Rezepte, Fotos und Essenspläne durch diese Sicherung ersetzen?'))return;let newMeal=backup.version===2?backup.meal:{recipes:[],plan:[],lastBackup:null};let allPhotos=backup.photos||{};for(let [id,data] of Object.entries(allPhotos)){if(!/^data:image\//.test(data))throw Error('Ungültiges Foto');let blob=await(await fetch(data)).blob();await putPhoto(id,blob)}localStorage.setItem('mein-haushalt-v01',JSON.stringify(backup.data));state=newMeal;save();notify('Sicherung importiert. Die App wird neu geladen.');location.reload()}
  function cookingMode(){let r=byId(editingRecipe);if(!r||!r.photos.length)return notify('Dieses Rezept hat noch keine Fotos.');let index=0;let dlg=el('cookDialog'),im=el('cookImage');async function show(){let b=await photo(r.photos[index]);if(b){im.src=URL.createObjectURL(b);el('cookCounter').textContent=`${index+1} / ${r.photos.length}`}}el('cookPrev').onclick=()=>{index=(index+r.photos.length-1)%r.photos.length;show()};el('cookNext').onclick=()=>{index=(index+1)%r.photos.length;show()};el('cookClose').onclick=()=>dlg.close();dlg.showModal();show();if(navigator.wakeLock)navigator.wakeLock.request('screen').then(lock=>dlg.addEventListener('close',()=>lock.release(),{once:true})).catch(()=>{})}
- async function init(){try{photoDB=await openPhotos()}catch{notify('Der Fotospeicher ist nicht verfügbar. Bitte Browser-Einstellungen prüfen.');return}try{let raw=localStorage.getItem(store);if(raw){let s=JSON.parse(raw);if(Array.isArray(s.recipes)&&Array.isArray(s.plan))state=s}}catch{}el('recipeNew').onclick=()=>editRecipe();el('recipeSearch').oninput=renderRecipes;el('recipeFav').onclick=()=>{filterFav=!filterFav;renderRecipes()};el('rSave').onclick=saveRecipe;el('rDelete').onclick=deleteRecipe;el('rClose').onclick=()=>el('recipeDialog').close();el('rFiles').onchange=e=>{addPhotos([...e.target.files]);e.target.value=''};el('rExtract').onclick=importUrl;el('rImportPaste').onclick=importPastedText;el('rCooking').onclick=cookingMode;el('pPortions').oninput=()=>{updatePlanFields();renderAllocationDays()};el('pCook').onchange=renderAllocationDays;el('pRecipe').onchange=()=>{updatePlanFields();let r=byId(el('pRecipe').value);if(r&&!editingPlan){el('pPortions').value=r.servings||4;allocationDraft=[{date:el('pDate').value,portions:Number(el('pPortions').value)}];renderAllocationDays()}};el('pDate').onchange=()=>{if(!editingPlan){el('pCook').value=el('pDate').value;allocationDraft=[{date:el('pDate').value,portions:Number(el('pPortions').value)||1}];renderAllocationDays()}};el('pSave').onclick=savePlan;el('pConvert').onclick=()=>{let text=el('pText').value.trim();if(!text)return notify('Bitte zuerst einen Namen eingeben.');el('planDialog').close();editRecipe(null,text)};el('pOpenRecipe').onclick=()=>{let id=el('pRecipe').value;if(id){el('planDialog').close();editRecipe(id)}};el('pCopy').onclick=()=>{let p=state.plan.find(x=>x.id===editingPlan);if(!p)return;let d=prompt('Auf welchen Esstag kopieren? (JJJJ-MM-TT)',p.date);if(!d)return;if(!/^\d{4}-\d{2}-\d{2}$/.test(d))return notify('Ungültiges Datum');let diff=Math.round((dt(d)-dt(p.date))/864e5);state.plan.push({...structuredClone(p),id:uid(),order:state.plan.length,date:d,cookDate:p.cookDate?add(p.cookDate,diff):null,allocations:assigned(p).map(a=>({...a,date:add(a.date,diff)}))});save();el('planDialog').close();render()};el('pDelete').onclick=deletePlan;el('pClose').onclick=()=>el('planDialog').close();el('planNew').onclick=()=>planEditor();el('rangeEnd').onchange=e=>{rangeEnd=e.target.value;renderPlan()};el('viewList').onclick=()=>{view='list';renderPlan()};el('viewWeek').onclick=()=>{view='week';renderPlan()};el('cookingTab').onclick=()=>{el('cookingSection').hidden=!el('cookingSection').hidden;renderCooking()};el('export').onclick=()=>exportAll().catch(e=>notify('Export fehlgeschlagen: '+e.message));el('import').onchange=async e=>{try{if(e.target.files[0])await importAll(e.target.files[0])}catch(err){notify('Import nicht möglich: '+err.message)}e.target.value=''};el('backupNow').onclick=()=>tab('settings');document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.page==='meals')renderCooking()}));render()}
+ async function init(){try{photoDB=await openPhotos()}catch{notify('Der Fotospeicher ist nicht verfügbar. Bitte Browser-Einstellungen prüfen.');return}try{let raw=localStorage.getItem(store);if(raw){let s=JSON.parse(raw);if(Array.isArray(s.recipes)&&Array.isArray(s.plan))state=s}}catch{}el('recipeNew').onclick=()=>editRecipe();el('recipeSearch').oninput=renderRecipes;el('recipeFav').onclick=()=>{filterFav=!filterFav;renderRecipes()};el('rSave').onclick=saveRecipe;el('rDelete').onclick=deleteRecipe;el('rClose').onclick=()=>el('recipeDialog').close();el('rFiles').onchange=e=>{addPhotos([...e.target.files]);e.target.value=''};el('rExtract').onclick=importUrl;el('rPdfFile').onchange=e=>{const f=e.target.files[0];if(f)importPdf(f);e.target.value=''};el('rImportPaste').onclick=importPastedText;el('rCooking').onclick=cookingMode;el('pPortions').oninput=()=>{updatePlanFields();renderAllocationDays()};el('pCook').onchange=renderAllocationDays;el('pRecipe').onchange=()=>{updatePlanFields();let r=byId(el('pRecipe').value);if(r&&!editingPlan){el('pPortions').value=r.servings||4;allocationDraft=[{date:el('pDate').value,portions:Number(el('pPortions').value)}];renderAllocationDays()}};el('pDate').onchange=()=>{if(!editingPlan){el('pCook').value=el('pDate').value;allocationDraft=[{date:el('pDate').value,portions:Number(el('pPortions').value)||1}];renderAllocationDays()}};el('pSave').onclick=savePlan;el('pConvert').onclick=()=>{let text=el('pText').value.trim();if(!text)return notify('Bitte zuerst einen Namen eingeben.');el('planDialog').close();editRecipe(null,text)};el('pOpenRecipe').onclick=()=>{let id=el('pRecipe').value;if(id){el('planDialog').close();editRecipe(id)}};el('pCopy').onclick=()=>{let p=state.plan.find(x=>x.id===editingPlan);if(!p)return;let d=prompt('Auf welchen Esstag kopieren? (JJJJ-MM-TT)',p.date);if(!d)return;if(!/^\d{4}-\d{2}-\d{2}$/.test(d))return notify('Ungültiges Datum');let diff=Math.round((dt(d)-dt(p.date))/864e5);state.plan.push({...structuredClone(p),id:uid(),order:state.plan.length,date:d,cookDate:p.cookDate?add(p.cookDate,diff):null,allocations:assigned(p).map(a=>({...a,date:add(a.date,diff)}))});save();el('planDialog').close();render()};el('pDelete').onclick=deletePlan;el('pClose').onclick=()=>el('planDialog').close();el('planNew').onclick=()=>planEditor();el('rangeEnd').onchange=e=>{rangeEnd=e.target.value;renderPlan()};el('viewList').onclick=()=>{view='list';renderPlan()};el('viewWeek').onclick=()=>{view='week';renderPlan()};el('cookingTab').onclick=()=>{el('cookingSection').hidden=!el('cookingSection').hidden;renderCooking()};el('export').onclick=()=>exportAll().catch(e=>notify('Export fehlgeschlagen: '+e.message));el('import').onchange=async e=>{try{if(e.target.files[0])await importAll(e.target.files[0])}catch(err){notify('Import nicht möglich: '+err.message)}e.target.value=''};el('backupNow').onclick=()=>tab('settings');document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.page==='meals')renderCooking()}));render()}
  return{init,render,editRecipe,planEditor,exportAll,importAll};
 })();
 M.init();

@@ -5,3 +5,5 @@ textarea{width:100%;border:1px solid #cad8cf;border-radius:9px;padding:10px;font
 #pRecipeDetails{white-space:pre-wrap;line-height:1.5}
 
 .allocation-days{max-height:330px;overflow-y:auto;border:1px solid #d8dedb;border-radius:12px;margin:10px 0}.allocation-day{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid #e5e9e7}.allocation-day:last-child{border-bottom:0}.allocation-day span{font-size:.9rem}.allocation-controls{display:flex;align-items:center;gap:8px;flex-shrink:0}.allocation-controls button{min-width:40px;min-height:40px;padding:6px;font-size:1.25rem}.allocation-controls strong{display:inline-block;min-width:24px;text-align:center;font-variant-numeric:tabular-nums}.allocation-controls button:disabled{opacity:.35}
+
+.pdf-import{display:block;margin:12px 0;padding:10px;border:1px solid #ccd9d2;border-radius:10px}.pdf-import input{margin-top:8px}.pdf-import small{display:block;margin-top:6px;line-height:1.4}

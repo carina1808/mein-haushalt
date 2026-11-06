@@ -9,3 +9,5 @@ textarea{width:100%;border:1px solid #cad8cf;border-radius:9px;padding:10px;font
 .pdf-import{display:block;margin:12px 0;padding:10px;border:1px solid #ccd9d2;border-radius:10px}.pdf-import input{margin-top:8px}.pdf-import small{display:block;margin-top:6px;line-height:1.4}
 
 nav button{min-width:0}nav small{font-size:9px}.recipe-suggestions{max-height:210px;overflow-y:auto;border:1px solid #dfe8df;border-radius:9px;margin-top:7px}.recipe-suggestions:empty{display:none}.recipe-suggestions button{display:block;width:100%;text-align:left;border-bottom:1px solid #e5ebe6;background:white;border-radius:0;font-weight:400}.shopping-item{margin:9px 0}.shopping-item.done{opacity:.58}.shopping-item.done>strong{text-decoration:line-through}.shopping-item label{margin:8px 0}.shopping-item .shopping-missing{font-weight:700;color:#276c58;margin:7px 0}.shopping-item input[type=number]{max-width:220px}
+
+.flat-item{padding:10px 4px;border-bottom:1px solid #e1e9e3;font-size:16px}.flat-item.done span{text-decoration:line-through;opacity:.55}
